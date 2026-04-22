@@ -376,6 +376,8 @@ def _build_feature_type(
 
     description = _clean_text(class_info.tagged_values.get("documentation"))
 
+    package_name = class_info.tagged_values.get("package_name")
+
     parent_names = [classes_by_id[parent].name for parent in parents.get(class_info.id, []) if parent in classes_by_id]
     association_entries = list(associations.get(class_info.id, []))
     relationships: dict[str, Any] = {
@@ -385,6 +387,7 @@ def _build_feature_type(
 
     feature_dict: dict[str, Any] = {
         "name": class_info.name,
+        "package": package_name,
         "description": description,
         "attributes": attributes,
         "abstract": class_info.abstract,
