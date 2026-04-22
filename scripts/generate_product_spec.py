@@ -28,7 +28,7 @@ from md.product_specification import (  # noqa: E402
     render_template,
 )
 from ogc_api.feature_types import load_feature_types  # noqa: E402
-from puml.feature_types import render_feature_types_to_puml  # noqa: E402
+from puml.generate_puml_by_package import generate_puml_by_package  # noqa: E402
 from xmi.feature_catalog import load_feature_types_from_xmi  # noqa: E402
 
 
@@ -370,7 +370,7 @@ def _build_feature_catalogue_assets(
     uml_path = spec_dir / f"{base_name}.puml"
     if feature_types:
         title = f"{product_title} - Objekttyper" if product_title else None
-        uml_content = render_feature_types_to_puml(
+        uml_content = generate_puml_by_package(
             feature_types,
             title=title,
             package="Objekttyper",
