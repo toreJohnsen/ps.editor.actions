@@ -1,4 +1,4 @@
-"""Generate multiple PlantUML diagrams grouped by package attribute."
+"""Generate multiple PlantUML diagrams grouped by package attribute."""
 import json
 from pathlib import Path
 from collections import defaultdict
