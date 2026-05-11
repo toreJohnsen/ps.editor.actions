@@ -37,6 +37,7 @@ class _UmlClass:
     abstract: bool = False
     attributes: list[_UmlAttribute] = field(default_factory=list)
     package: str = ""
+    diagram: str = ""  # NEW: Add diagram field
 
 
 def load_feature_types_from_xmi(
@@ -141,7 +142,8 @@ def _parse_feature_types(text: str) -> list[dict[str, Any]]:
     root = ET.fromstring(text)
     extra_tagged = _collect_global_tagged_values(root)
     package_by_class_id = _collect_class_packages(root)
-    classes, order = _collect_classes(root, extra_tagged, package_by_class_id)
+    diagram_by_class_id = _collect_class_diagrams(root)  # NEW: Collect diagram mappings
+    classes, order = _collect_classes(root, extra_tagged, package_by_class_id, diagram_by_class_id)
     parents = _collect_generalizations(root)
     associations = _collect_associations(root, classes)
 
@@ -194,11 +196,13 @@ def _collect_classes(
     root: ET.Element,
     extra_tagged: Mapping[str, Mapping[str, str]] | None = None,
     package_by_class_id: Mapping[str, str] | None = None,
+    diagram_by_class_id: Mapping[str, str] | None = None,  # NEW: Add diagram parameter
 ) -> tuple[dict[str, _UmlClass], list[str]]:
     classes: dict[str, _UmlClass] = {}
     order: list[str] = []
     extra_tagged = extra_tagged or {}
     package_by_class_id = package_by_class_id or {}
+    diagram_by_class_id = diagram_by_class_id or {}  # NEW: Default to empty
 
     for class_elem in root.findall(".//UML:Class", _NS):
         class_id = _get_identifier(class_elem)
@@ -218,6 +222,7 @@ def _collect_classes(
             abstract=abstract,
             attributes=attributes,
             package=package_by_class_id.get(class_id, ""),
+            diagram=diagram_by_class_id.get(class_id, ""),  # NEW: Include diagram
         )
         classes[class_id] = info
         order.append(class_id)
@@ -247,6 +252,26 @@ def _collect_class_packages(root: ET.Element) -> dict[str, str]:
             # iterate packages outer->inner, the inner package will overwrite
             # the outer one, which is what we want.
             mapping[class_id] = pkg_name
+    return mapping
+
+
+def _collect_class_diagrams(root: ET.Element) -> dict[str, str]:
+    """Map each class id to the UML:Diagram name it appears in.
+
+    Walks through all ``UML:Diagram`` elements and their
+    ``UML:Diagram.element`` children to find which diagram each class belongs to.
+    If a class appears in multiple diagrams, the first one is used.
+    """
+    mapping: dict[str, str] = {}
+    for diagram in root.findall(".//UML:Diagram", _NS):
+        diagram_name = (diagram.get("name") or "").strip()
+        if not diagram_name:
+            continue
+        # Find all diagram elements that reference classes
+        for diag_elem in diagram.findall(".//UML:DiagramElement", _NS):
+            subject = diag_elem.get("subject")
+            if subject and subject not in mapping:
+                mapping[subject] = diagram_name
     return mapping
 
 
@@ -423,6 +448,9 @@ def _build_feature_type(
 
     if class_info.package:
         feature_dict["package"] = class_info.package
+
+    if class_info.diagram:  # NEW: Include diagram if present
+        feature_dict["diagram"] = class_info.diagram
 
     return feature_dict
 
