@@ -30,7 +30,7 @@ from md.product_specification import (  # noqa: E402
 from ogc_api.feature_types import load_feature_types  # noqa: E402
 from puml.feature_types import (  # noqa: E402
     group_feature_types_by_package,
-    render_feature_types_by_diagram,
+    render_feature_types_per_package,
     render_feature_types_to_puml,
     render_overview_diagram,
 )
@@ -383,7 +383,7 @@ def _build_feature_catalogue_assets(
         # combined diagram.
         packages = [pkg for pkg in group_feature_types_by_package(feature_types) if pkg]
         if len(packages) >= 2:
-            per_package = render_feature_types_by_diagram(
+            per_package = render_feature_types_per_package(
                 feature_types,
                 title_prefix=product_title or "",
                 include_notes=False,
