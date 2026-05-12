@@ -13,6 +13,7 @@ from typing import Any
 __all__ = [
     "render_feature_types_to_puml",
     "render_feature_types_per_package",
+    "render_feature_types_by_diagram",
     "render_overview_diagram",
     "group_feature_types_by_package",
     "main",
@@ -230,6 +231,77 @@ def render_feature_types_per_package(
     return diagrams
 
 
+def render_feature_types_by_diagram(
+    feature_types: Sequence[Mapping[str, Any]],
+    *,
+    title_prefix: str = "",
+    include_notes: bool = True,
+    include_descriptions: bool = True,
+    include_generalization: bool = True,
+) -> dict[str, str]:
+    """Render one PlantUML diagram per UML diagram listed in the feature_types.
+
+    Groups feature types by their ``diagrams`` field (from XMI). Each diagram
+    includes all classes that appear in that diagram, plus ghost class boxes for
+    any referenced classes from other diagrams, wrapped in an "Eksterne referanser"
+    package block.
+
+    Returns a dict mapping diagram name to PlantUML source. If a feature type has
+    no diagrams, it's grouped under the empty-string key.
+    """
+    # Build mapping of class names to their diagrams
+    name_to_diagrams: dict[str, list[str]] = {}
+    for ft in feature_types:
+        if not isinstance(ft, Mapping):
+            continue
+        name = str(ft.get("name") or "").strip()
+        if name:
+            diagrams_list = ft.get("diagrams")
+            if isinstance(diagrams_list, Sequence) and not isinstance(diagrams_list, (str, bytes)):
+                name_to_diagrams[name] = [str(d).strip() for d in diagrams_list if isinstance(d, str)]
+            else:
+                name_to_diagrams[name] = []
+
+    # Group feature types by diagram
+    diagram_groups: dict[str, list[Mapping[str, Any]]] = {}
+    for ft in feature_types:
+        if not isinstance(ft, Mapping):
+            continue
+        name = str(ft.get("name") or "").strip()
+        diagrams_list = name_to_diagrams.get(name, [])
+
+        if not diagrams_list:
+            # Feature type has no diagrams
+            diagram_groups.setdefault("", []).append(ft)
+        else:
+            # Add feature type to each of its diagrams
+            for diagram_name in diagrams_list:
+                diagram_groups.setdefault(diagram_name, []).append(ft)
+
+    # Render a diagram for each group
+    diagrams: dict[str, str] = {}
+    for diagram_name, members in diagram_groups.items():
+        # Find external references
+        external_names = _collect_external_references_for_diagram(
+            members, diagram_name, name_to_diagrams
+        )
+
+        title_parts = [part for part in (title_prefix, diagram_name) if part]
+        title = " - ".join(title_parts) if title_parts else None
+
+        diagrams[diagram_name] = _render_diagram_by_diagram(
+            members,
+            diagram_name,
+            external_names,
+            title=title,
+            include_notes=include_notes,
+            include_descriptions=include_descriptions,
+            include_generalization=include_generalization,
+        )
+
+    return diagrams
+
+
 def render_overview_diagram(
     feature_types: Sequence[Mapping[str, Any]],
     *,
@@ -264,7 +336,7 @@ def render_overview_diagram(
             header, alias = _class_header_and_alias(name)
             keyword = "abstract " if ft.get("abstract") is True else ""
             stereotype = "<<featureType>>"
-            lines.append(f"{indent}{keyword}class {header} {stereotype} {{")
+            lines.append(f"{indent}class {header} {stereotype} {{")
             lines.append(f"{indent}}}")
             alias_map[name] = alias
 
@@ -319,6 +391,53 @@ def _collect_external_references(
                 str(m.get("name") or "") for m in members if isinstance(m, Mapping)
             }:
                 externals.setdefault(parent, target_pkg)
+    return externals
+
+
+def _collect_external_references_for_diagram(
+    members: Sequence[Mapping[str, Any]],
+    diagram_name: str,
+    name_to_diagrams: Mapping[str, list[str]],
+) -> dict[str, str]:
+    """Find names referenced by members that live in *other* diagrams.
+
+    Returns a dict mapping external class name to one of its diagrams
+    (or empty string when the target's diagram is unknown).
+    """
+    member_names = {str(m.get("name") or "").strip() for m in members if isinstance(m, Mapping)}
+    externals: dict[str, str] = {}
+
+    for ft in members:
+        relationships = ft.get("relationships") if isinstance(ft, Mapping) else None
+        if not isinstance(relationships, Mapping):
+            continue
+
+        # Check associations
+        for assoc in relationships.get("associations") or []:
+            if not isinstance(assoc, Mapping):
+                continue
+            target = str(assoc.get("target") or "").strip()
+            if not target or target in member_names or target in externals:
+                continue
+            # Find which diagram the target belongs to
+            target_diagrams = name_to_diagrams.get(target, [])
+            if target_diagrams and target_diagrams[0] != diagram_name:
+                externals[target] = target_diagrams[0]
+            elif not target_diagrams:
+                externals[target] = ""
+
+        # Check inheritance
+        for parent in relationships.get("inheritance") or []:
+            parent = str(parent).strip() if isinstance(parent, str) else ""
+            if not parent or parent in member_names or parent in externals:
+                continue
+            # Find which diagram the parent belongs to
+            parent_diagrams = name_to_diagrams.get(parent, [])
+            if parent_diagrams and parent_diagrams[0] != diagram_name:
+                externals[parent] = parent_diagrams[0]
+            elif not parent_diagrams:
+                externals[parent] = ""
+
     return externals
 
 
@@ -384,6 +503,79 @@ def _render_package_diagram(
             header, alias = _class_header_and_alias(ext_name)
             ext_pkg = external_names.get(ext_name, "")
             stereotype_label = f"<<{ext_pkg}>>" if ext_pkg else "<<external>>"
+            lines.append(f"  class {header} {stereotype_label} {{")
+            lines.append("  }")
+            alias_map[ext_name] = alias
+        lines.append("}")
+
+    relation_lines = _build_relationship_lines(
+        feature_type_entries,
+        alias_map,
+        "",
+        include_generalization=include_generalization,
+    )
+    if relation_lines:
+        lines.append("")
+        lines.extend(relation_lines)
+
+    lines.append("")
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def _render_diagram_by_diagram(
+    members: Sequence[Mapping[str, Any]],
+    diagram_name: str,
+    external_names: Mapping[str, str],
+    *,
+    title: str | None,
+    include_notes: bool,
+    include_descriptions: bool,
+    include_generalization: bool,
+) -> str:
+    """Render a single diagram's PlantUML with an external-refs block."""
+    lines: list[str] = []
+    _append_diagram_preamble(lines, title=title)
+
+    alias_map: dict[str, str] = {}
+    datatypes = _collect_datatypes(members)
+
+    feature_type_entries = list(members)
+    if include_generalization:
+        feature_type_entries = _apply_inheritance_attributes(feature_type_entries)
+
+    for index, feature_type in enumerate(feature_type_entries):
+        if not isinstance(feature_type, Mapping):
+            continue
+        if index:
+            lines.append("")
+        alias = _append_feature_type(
+            lines,
+            feature_type,
+            "",
+            include_notes=include_notes,
+            include_descriptions=include_descriptions,
+        )
+        alias_map[str(feature_type.get("name", ""))] = alias
+
+    for dtype_name, dtype_attrs in datatypes.items():
+        lines.append("")
+        dtype_alias = _append_data_type(
+            lines,
+            dtype_name,
+            dtype_attrs,
+            "",
+            include_descriptions=include_descriptions,
+        )
+        alias_map[dtype_name] = dtype_alias
+
+    if external_names:
+        lines.append("")
+        lines.append('package "Eksterne referanser" <<Frame>> {')
+        for ext_name in sorted(external_names.keys()):
+            header, alias = _class_header_and_alias(ext_name)
+            ext_diagram = external_names.get(ext_name, "")
+            stereotype_label = f"<<{ext_diagram}>>" if ext_diagram else "<<external>>"
             lines.append(f"  class {header} {stereotype_label} {{")
             lines.append("  }")
             alias_map[ext_name] = alias
@@ -882,7 +1074,7 @@ def _build_geometry_note_lines(geometry: Any) -> list[str]:
 
 def _clean_inline_text(text: str) -> str:
     cleaned = " ".join(_clean_multiline_text(text))
-    return cleaned.replace("'", "’")
+    return cleaned.replace("'", "'")
 
 
 def _clean_multiline_text(text: str) -> list[str]:
