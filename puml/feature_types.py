@@ -336,6 +336,11 @@ def _render_package_diagram(
     lines: list[str] = []
     _append_diagram_preamble(lines, title=title)
 
+    # Add left-to-right direction hint for large diagrams
+   if len(members) > 8:
+        lines.append("left to right direction")
+        lines.append("")
+
     alias_map: dict[str, str] = {}
     datatypes = _collect_datatypes(members)
 
